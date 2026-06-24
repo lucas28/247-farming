@@ -1,0 +1,20 @@
+[
+  {
+    "nome": "Lucas",
+    "nickname": "Lucas247",
+    "cargo": "Líder",
+    "status": "Ativo"
+  },
+  {
+    "nome": "Rafael",
+    "nickname": "RafaSW",
+    "cargo": "Vice",
+    "status": "Ativo"
+  },
+  {
+    "nome": "Ana",
+    "nickname": "AnaPvP",
+    "cargo": "Membro",
+    "status": "Ativo"
+  }
+]

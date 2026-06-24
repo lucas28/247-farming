@@ -1,0 +1,20 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Segredos e dados locais
+.streamlit/secrets.toml
+data/guilda.db
+
+# IDE / OS
+.cursor/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Artefatos de scripts locais (não usados no app)
+scripts/__pycache__/
+data/backups/
