@@ -1309,8 +1309,12 @@ def page_meta_defesa() -> None:
             border: 1px solid #30363d;
             border-radius: 12px;
             padding: 0.85rem 0.75rem 1rem;
+            margin-bottom: 1.25rem;
             text-align: center;
-            height: 100%;
+            box-sizing: border-box;
+        }
+        [data-testid="stMarkdownContainer"]:has(.meta-monster-card) {
+            margin-bottom: 0.25rem !important;
         }
         .meta-monster-card img {
             width: 56px;
@@ -1349,6 +1353,17 @@ def page_meta_defesa() -> None:
             color: #58a6ff;
             font-size: 0.75rem;
             font-weight: 600;
+        }
+        .meta-best {
+            margin-top: 0.45rem;
+            color: #8b949e;
+            font-size: 0.72rem;
+            line-height: 1.4;
+            min-height: 2.8em;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
         </style>
         """,
@@ -1431,7 +1446,7 @@ def page_meta_defesa() -> None:
     show_n = min(30, len(df))
     cols_per_row = 3
     for i in range(0, show_n, cols_per_row):
-        cols = st.columns(cols_per_row)
+        cols = st.columns(cols_per_row, gap="large")
         for j, col in enumerate(cols):
             idx = i + j
             if idx >= show_n:
@@ -1455,7 +1470,7 @@ def page_meta_defesa() -> None:
                             {int(row["aparicoes"])} defesas · {batalhas_fmt} batalhas
                         </div>
                         <div class="meta-score">Score {row["meta_score"]:.1f}</div>
-                        <div class="meta-stats" style="margin-top:0.45rem;">Melhor: {melhor}</div>
+                        <div class="meta-best">Melhor: {melhor}</div>
                     </div>
                     """,
                     unsafe_allow_html=True,
