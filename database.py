@@ -524,8 +524,9 @@ def _seed_and_sync(conn: Any) -> None:
     cur = db_execute(conn, "SELECT COUNT(*) FROM defesas")
     defesas_vazias = db_fetchone(cur)[0] == 0
 
-    if defesas_vazias or versao_anterior < CONTENT_VERSION:
-        db_execute(conn, "DELETE FROM defesas")
+    # Seed de defesas só na primeira vez (tabela vazia). CONTENT_VERSION atualiza
+    # apenas guias em guild_config — nunca apaga defesas editadas pelo admin.
+    if defesas_vazias:
         db_executemany(
             conn,
             """

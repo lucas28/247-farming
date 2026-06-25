@@ -96,6 +96,8 @@ A região (`sa-east-1`) pode variar — use exatamente os valores que o painel *
 
 4. Faça redeploy do app. Na primeira execução, `init_db()` cria as tabelas e o seed de defesas/guias.
 
+**Dados da guilda vs. conteúdo do app:** `CONTENT_VERSION` (em `content.py`) atualiza apenas textos e guias em `guild_config` no deploy. Defesas, membros e eficiências editadas pelo admin **não** são apagadas em novos deploys — o seed de defesas roda só se a tabela estiver vazia.
+
 5. Cadastre membros pelo app ou importe via script (com `DATABASE_URL` no ambiente):
 
 ```bash
