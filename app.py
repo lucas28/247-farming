@@ -80,6 +80,17 @@ from auth import (
 )
 from monsters import PLACEHOLDER_IMG, resolve_many, unique_monsters_from_defesas
 from speed_calculator import render_speed_calculator
+from swgt_meta import (
+    BATTLE_RANKS,
+    BATTLE_TYPES,
+    NATURAL_STARS,
+    SIEGES_SEASONS,
+    SORT_OPTIONS,
+    aggregate_monsters,
+    build_swgt_url,
+    fetch_defense_rows,
+    monster_meta_to_dataframe,
+)
 
 # Versão local do cache de imagens (incrementar ao mudar regras de elemento/imagem)
 _IMAGE_CACHE_VERSION = 3
@@ -92,6 +103,7 @@ PAGINAS = [
     "🏠 Dashboard",
     "📜 Guias e Regras",
     "🛡️ Banco de Defesas",
+    "📈 Meta de Defesa",
     "⚡ Calculadora de Speed Tuning",
     "👥 Membros da Guilda",
     PAGE_ADMIN,
@@ -925,6 +937,18 @@ def invalidate_cache() -> None:
     cached_membros.clear()
     cached_defesas.clear()
     cached_monster_images.clear()
+    cached_swgt_defenses.clear()
+
+
+@st.cache_data(ttl=21600, show_spinner="Consultando SWGT.io…")
+def cached_swgt_defenses(
+    siege_special_date: str,
+    battle_type: str,
+    battle_rank: str,
+    natural_stars: str,
+) -> tuple:
+    rows = fetch_defense_rows(siege_special_date, battle_type, battle_rank, natural_stars)
+    return tuple(rows)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -1276,6 +1300,185 @@ def page_banco_defesas() -> None:
         st.dataframe(df_filtrado.drop(columns=["id"]), use_container_width=True, hide_index=True)
 
 
+def page_meta_defesa() -> None:
+    st.markdown(
+        """
+        <style>
+        .meta-monster-card {
+            background: #21262d;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 0.85rem 0.75rem 1rem;
+            text-align: center;
+            height: 100%;
+        }
+        .meta-monster-card img {
+            width: 56px;
+            height: 56px;
+            border-radius: 10px;
+            margin-bottom: 0.35rem;
+        }
+        .meta-monster-card h4 {
+            margin: 0.25rem 0;
+            font-size: 0.95rem;
+            color: #e6edf3;
+        }
+        .meta-rank {
+            font-size: 0.72rem;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .meta-wr {
+            font-size: 1.35rem;
+            font-weight: 700;
+            color: #3fb950;
+            margin: 0.15rem 0;
+        }
+        .meta-stats {
+            color: #8b949e;
+            font-size: 0.78rem;
+            line-height: 1.35;
+        }
+        .meta-score {
+            display: inline-block;
+            margin-top: 0.35rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            background: rgba(88, 166, 255, 0.12);
+            color: #58a6ff;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.title("📈 Meta de Defesa")
+    st.caption("Ranking de monstros do meta global, agregado a partir do SWGT.io.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        season_label = st.selectbox("Season Siege", list(SIEGES_SEASONS.keys()), key="meta_season")
+    with c2:
+        battle_type_label = st.selectbox("Tipo de batalha", list(BATTLE_TYPES.keys()), key="meta_battle_type")
+    with c3:
+        battle_rank_label = st.selectbox("Rank", list(BATTLE_RANKS.keys()), key="meta_battle_rank")
+    with c4:
+        stars_label = st.selectbox("Estrelas naturais", list(NATURAL_STARS.keys()), key="meta_natural_stars")
+
+    siege_code = SIEGES_SEASONS[season_label]
+    battle_type_code = BATTLE_TYPES[battle_type_label]
+    battle_rank_code = BATTLE_RANKS[battle_rank_label]
+    stars_code = NATURAL_STARS[stars_label]
+
+    c5, c6, c7 = st.columns([2, 2, 1])
+    with c5:
+        min_battles = st.slider(
+            "Batalhas mínimas por monstro",
+            min_value=0,
+            max_value=30000,
+            value=5000,
+            step=500,
+            key="meta_min_battles",
+        )
+    with c6:
+        sort_label = st.selectbox("Ordenar por", list(SORT_OPTIONS.keys()), key="meta_sort_by")
+    with c7:
+        st.write("")
+        st.write("")
+        if st.button("🔄 Atualizar", use_container_width=True, key="meta_refresh"):
+            cached_swgt_defenses.clear()
+            st.rerun()
+
+    swgt_url = build_swgt_url(siege_code, battle_type_code, battle_rank_code, stars_code)
+
+    try:
+        rows = list(
+            cached_swgt_defenses(siege_code, battle_type_code, battle_rank_code, stars_code)
+        )
+    except Exception as exc:
+        st.error(f"Erro ao carregar dados do SWGT: {exc}")
+        st.link_button("Abrir SWGT.io", swgt_url, use_container_width=False)
+        return
+
+    monsters = aggregate_monsters(rows, min_battles_monster=min_battles)
+    df = monster_meta_to_dataframe(monsters, sort_by=SORT_OPTIONS[sort_label])
+
+    m1, m2, m3 = st.columns([2, 2, 2])
+    with m1:
+        st.metric("Defesas no SWGT", f"{len(rows):,}".replace(",", "."))
+    with m2:
+        st.metric("Monstros rankeados", len(df))
+    with m3:
+        st.link_button("Ver fonte no SWGT.io", swgt_url, use_container_width=True)
+
+    st.caption(
+        "Cada linha do SWGT é um trio com ≥1.000 batalhas. "
+        "WR ponderado = média por volume de batalhas. "
+        "Meta Score = WR ponderado × log₁₀(batalhas+1). "
+        "Cache: 6 horas — use Atualizar para forçar nova consulta."
+    )
+
+    if df.empty:
+        st.warning("Nenhum monstro atingiu o mínimo de batalhas. Reduza o filtro.")
+        return
+
+    image_map = cached_monster_images(tuple(df["nome"].tolist()))
+
+    st.subheader("Top do meta")
+    show_n = min(12, len(df))
+    cols_per_row = 3
+    for i in range(0, show_n, cols_per_row):
+        cols = st.columns(cols_per_row)
+        for j, col in enumerate(cols):
+            idx = i + j
+            if idx >= show_n:
+                break
+            row = df.iloc[idx]
+            rank = idx + 1
+            nome = str(row["nome"])
+            url = image_map.get(nome, PLACEHOLDER_IMG)
+            safe_name = nome.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            melhor = str(row["melhor_defesa"]).replace("&", "&amp;").replace("<", "&lt;")
+            batalhas_fmt = f"{int(row['batalhas_totais']):,}".replace(",", ".")
+            with col:
+                st.markdown(
+                    f"""
+                    <div class="meta-monster-card">
+                        <div class="meta-rank">#{rank} no meta</div>
+                        <img src="{url}" alt="{safe_name}" loading="lazy" />
+                        <h4>{safe_name}</h4>
+                        <div class="meta-wr">{row["wr_ponderado"]:.1f}% WR</div>
+                        <div class="meta-stats">
+                            {int(row["aparicoes"])} defesas · {batalhas_fmt} batalhas
+                        </div>
+                        <div class="meta-score">Score {row["meta_score"]:.1f}</div>
+                        <div class="meta-stats" style="margin-top:0.45rem;">Melhor: {melhor}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    with st.expander("📋 Tabela completa"):
+        table = df.copy()
+        table.insert(0, "#", range(1, len(table) + 1))
+        table = table.rename(
+            columns={
+                "nome": "Monstro",
+                "meta_score": "Meta Score",
+                "wr_ponderado": "WR % (pond.)",
+                "aparicoes": "Aparições",
+                "batalhas_totais": "Batalhas",
+                "wr_max": "WR máx.",
+                "melhor_wr": "Melhor WR %",
+                "melhor_defesa": "Melhor defesa",
+            }
+        )
+        st.dataframe(table, use_container_width=True, hide_index=True)
+
+
 def page_speed_calculator() -> None:
     render_speed_calculator()
 
@@ -1559,6 +1762,7 @@ ROTEADOR = {
     "🏠 Dashboard": page_dashboard,
     "📜 Guias e Regras": page_guias_regras,
     "🛡️ Banco de Defesas": page_banco_defesas,
+    "📈 Meta de Defesa": page_meta_defesa,
     "⚡ Calculadora de Speed Tuning": page_speed_calculator,
     "👥 Membros da Guilda": page_membros,
     PAGE_ADMIN: page_admin,

@@ -8,6 +8,7 @@ __pycache__/
 # Segredos e dados locais
 .streamlit/secrets.toml
 data/guilda.db
+response.html
 
 # IDE / OS
 .cursor/

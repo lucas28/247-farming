@@ -7,6 +7,7 @@ Plataforma Streamlit para a guilda **24/7 Farming** (Summoners War): dashboard, 
 - Login por nickname (auto-cadastro de novos membros)
 - Líder/Vice: PIN em secrets + painel admin
 - Banco de defesas com eficiência e imagens SWARFARM
+- **Meta de Defesa** — ranking de monstros do meta global (SWGT.io)
 - Calculadora de speed tuning (simulação de ticks GW/Siege)
 - Guias WGB e Siege editáveis pelo admin
 
@@ -150,6 +151,7 @@ app.py                 # UI Streamlit
 auth.py                # Sessão e PIN
 database.py            # SQLite ou PostgreSQL (Supabase) + CRUD
 speed_calculator.py    # Tuning por simulação de ticks
+swgt_meta.py           # Coleta e ranking meta SWGT.io
 monsters.py            # API SWARFARM + cache
 content.py / guides.py # Conteúdo dos guias
 textos.md              # Fonte markdown dos textos
