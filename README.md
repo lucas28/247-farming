@@ -71,16 +71,18 @@ admin_pin = "seu_pin_forte"
 DATABASE_URL = "postgresql://postgres.cugzgfbbtugeleotqwuc:[SENHA]@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
 ```
 
-**Opção B** — campos separados (recomendado para senhas com caracteres especiais):
+**Opção B** — campos separados (recomendado):
 
 ```toml
 admin_pin = "seu_pin_forte"
-DB_HOST = "aws-0-sa-east-1.pooler.supabase.com"
+DB_HOST = "cole_aqui_o_host_do_painel_Connect"
 DB_PORT = 6543
 DB_USER = "postgres.cugzgfbbtugeleotqwuc"
 DB_PASSWORD = "sua_senha"
 DB_NAME = "postgres"
 ```
+
+> **Atenção:** `DB_HOST` deve ser o host **real** copiado do Supabase (ex.: `aws-0-sa-east-1.pooler.supabase.com`). **Não** use `XXXX` nem texto de exemplo — isso causa o erro *"could not translate host name"*.
 
 > **Importante:** não use `db.cugzgfbbtugeleotqwuc.supabase.co:5432` no Streamlit Cloud. Esse host é IPv6 e costuma falhar no deploy. Use sempre o **pooler** (`*.pooler.supabase.com`, porta **6543** ou **5432**, usuário `postgres.cugzgfbbtugeleotqwuc`).
 
