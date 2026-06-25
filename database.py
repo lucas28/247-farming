@@ -8,6 +8,7 @@ Sem DATABASE_URL, usa data/guilda.db (desenvolvimento local).
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -189,7 +190,9 @@ def get_backend_label() -> str:
 
 def _adapt_sql(sql: str) -> str:
     if uses_postgres():
-        return sql.replace("?", "%s")
+        sql = sql.replace("?", "%s")
+        # psycopg2 interpreta % como placeholder — escapa % literais (ex.: LIKE 'Exemplo 5%')
+        sql = re.sub(r"%(?!s)", "%%", sql)
     return sql
 
 
