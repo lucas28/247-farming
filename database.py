@@ -617,18 +617,29 @@ def get_membro_by_nickname(nickname: str) -> dict | None:
     if not nick:
         return None
     conn = get_connection()
-    sql = _adapt_nickname_lookup(
-        """
-        SELECT id, nome, nickname, cargo, status
-        FROM membros
-        WHERE nickname = ? COLLATE NOCASE
-        """
+    sql = _adapt_sql(
+        _adapt_nickname_lookup(
+            """
+            SELECT id, nome, nickname, cargo, status
+            FROM membros
+            WHERE nickname = ? COLLATE NOCASE
+            """
+        )
     )
     try:
-        df = pd.read_sql_query(sql, conn, params=(nick,))
+        cur = db_execute(conn, sql, (nick,))
+        row = db_fetchone(cur)
     finally:
         conn.close()
-    return df.iloc[0].to_dict() if not df.empty else None
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "nome": row[1],
+        "nickname": row[2],
+        "cargo": row[3],
+        "status": row[4],
+    }
 
 
 def nickname_disponivel(nickname: str) -> bool:
