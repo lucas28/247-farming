@@ -2,18 +2,21 @@
 """
 Ferramentas de banco para deploy da guilda 24/7 Farming.
 
+SQLite (local): sem DATABASE_URL no ambiente.
+PostgreSQL/Supabase: export DATABASE_URL antes de rodar.
+
 Uso:
+  python scripts/seed_production.py status
   python scripts/seed_production.py fresh --force
-  python scripts/seed_production.py fresh --force --guild "24/7 Farming" --discord "https://discord.gg/..."
   python scripts/seed_production.py import-membros scripts/membros.exemplo.json
   python scripts/seed_production.py backup
-  python scripts/seed_production.py status
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from datetime import datetime
@@ -22,29 +25,41 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from database import CARGOS, DB_PATH, STATUS_OPCOES, create_membro, get_connection, init_db  # noqa: E402
-
-
-def _confirm_force() -> None:
-    if not DB_PATH.exists():
-        return
-    print(f"AVISO: isto substitui ou altera {DB_PATH}")
+from database import (  # noqa: E402
+    CARGOS,
+    DB_PATH,
+    STATUS_OPCOES,
+    create_membro,
+    db_execute,
+    db_fetchone,
+    get_backend_label,
+    get_connection,
+    init_db,
+    reset_all_data,
+    uses_postgres,
+)
 
 
 def cmd_status(_: argparse.Namespace) -> int:
-    if not DB_PATH.exists():
-        print("Banco não encontrado. Rode: python scripts/seed_production.py fresh --force")
+    if not uses_postgres() and not DB_PATH.exists():
+        print("Banco SQLite não encontrado. Rode: python scripts/seed_production.py fresh --force")
         return 1
+    if uses_postgres() and not os.environ.get("DATABASE_URL"):
+        print("DATABASE_URL não definida no ambiente.")
+        return 1
+
     conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT nome_guilda, discord_url FROM guild_config WHERE id = 1")
-    guild = cur.fetchone()
-    cur.execute("SELECT COUNT(*) FROM membros")
-    membros = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM defesas")
-    defesas = cur.fetchone()[0]
-    conn.close()
-    print(f"Banco: {DB_PATH}")
+    try:
+        cur = db_execute(conn, "SELECT nome_guilda, discord_url FROM guild_config WHERE id = 1")
+        guild = db_fetchone(cur)
+        cur = db_execute(conn, "SELECT COUNT(*) FROM membros")
+        membros = db_fetchone(cur)[0]
+        cur = db_execute(conn, "SELECT COUNT(*) FROM defesas")
+        defesas = db_fetchone(cur)[0]
+    finally:
+        conn.close()
+
+    print(f"Backend: {get_backend_label()}")
     print(f"Guilda: {guild[0] if guild else '?'}")
     print(f"Discord: {guild[1] if guild else '?'}")
     print(f"Membros: {membros}")
@@ -53,30 +68,35 @@ def cmd_status(_: argparse.Namespace) -> int:
 
 
 def cmd_fresh(args: argparse.Namespace) -> int:
-    _confirm_force()
-    if DB_PATH.exists():
+    if uses_postgres():
         if not args.force:
+            print("Postgres: use --force para apagar todos os dados e recriar o seed.")
+            return 1
+        print(f"Resetando {get_backend_label()}...")
+        reset_all_data()
+    else:
+        if DB_PATH.exists() and not args.force:
             print("O banco já existe. Use --force para recriar.")
             return 1
-        DB_PATH.unlink()
-        print("Banco anterior removido.")
+        if DB_PATH.exists():
+            DB_PATH.unlink()
+            print("Banco SQLite anterior removido.")
+        init_db()
 
-    init_db()
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        if args.no_demo_members:
+            db_execute(conn, "DELETE FROM membros")
+            print("Membros de demonstração removidos.")
+        if args.guild:
+            db_execute(conn, "UPDATE guild_config SET nome_guilda = ? WHERE id = 1", (args.guild,))
+        if args.discord:
+            db_execute(conn, "UPDATE guild_config SET discord_url = ? WHERE id = 1", (args.discord,))
+        conn.commit()
+    finally:
+        conn.close()
 
-    if args.no_demo_members:
-        cur.execute("DELETE FROM membros")
-        print("Membros de demonstração removidos.")
-
-    if args.guild:
-        cur.execute("UPDATE guild_config SET nome_guilda = ? WHERE id = 1", (args.guild,))
-    if args.discord:
-        cur.execute("UPDATE guild_config SET discord_url = ? WHERE id = 1", (args.discord,))
-
-    conn.commit()
-    conn.close()
-    print(f"Banco pronto em {DB_PATH}")
+    print(f"Banco pronto ({get_backend_label()}).")
     return 0
 
 
@@ -84,9 +104,6 @@ def cmd_import_membros(args: argparse.Namespace) -> int:
     path = Path(args.arquivo)
     if not path.is_file():
         print(f"Arquivo não encontrado: {path}")
-        return 1
-    if not DB_PATH.exists():
-        print("Banco não existe. Rode fresh --force antes.")
         return 1
 
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -121,6 +138,9 @@ def cmd_import_membros(args: argparse.Namespace) -> int:
 
 
 def cmd_backup(args: argparse.Namespace) -> int:
+    if uses_postgres():
+        print("Backup automático só para SQLite. No Supabase, use Dashboard → Backups ou pg_dump.")
+        return 1
     if not DB_PATH.exists():
         print("Nada para backup — banco não existe.")
         return 1
@@ -142,10 +162,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_fresh = sub.add_parser("fresh", help="Recria o banco (guild config + defesas seed)")
     p_fresh.add_argument("--force", action="store_true", help="Sobrescreve banco existente")
-    p_fresh.add_argument("--no-demo-members", action="store_true", default=True,
-                         help="Remove membros de exemplo (padrão: sim)")
-    p_fresh.add_argument("--keep-demo-members", action="store_true",
-                         help="Mantém Lucas/Rafael/Ana/Bruno de demonstração")
+    p_fresh.add_argument(
+        "--no-demo-members",
+        action="store_true",
+        default=True,
+        help="Remove membros de exemplo (padrão: sim)",
+    )
+    p_fresh.add_argument(
+        "--keep-demo-members",
+        action="store_true",
+        help="Mantém Lucas/Rafael/Ana/Bruno de demonstração",
+    )
     p_fresh.add_argument("--guild", help="Nome da guilda")
     p_fresh.add_argument("--discord", help="URL do Discord")
     p_fresh.set_defaults(func=cmd_fresh)

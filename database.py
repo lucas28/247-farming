@@ -1,10 +1,16 @@
 """
-Camada de persistência SQLite para a plataforma da guilda.
-Utiliza sqlite3 para escrita e pandas para leitura em lote.
+Camada de persistência — SQLite (local) ou PostgreSQL/Supabase (produção).
+
+Configure DATABASE_URL nos secrets do Streamlit ou na variável de ambiente.
+Sem DATABASE_URL, usa data/guilda.db (desenvolvimento local).
 """
 
+from __future__ import annotations
+
+import os
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -26,24 +32,117 @@ STATUS_OPCOES = ["Ativo", "Inativo"]
 TIPOS_DEFESA = ["Conteste de SPD", "Anti-Cleave"]
 ESTRELAS = ["4⭐", "5⭐"]
 
+_USE_POSTGRES: bool | None = None
+_DATABASE_URL: str | None = None
 
-def _guides_json_from_text(wgb_rules: str, siege_rules: str, metas: str) -> tuple[str, str]:
-    return build_guides_payload(wgb_rules, siege_rules, metas)
+
+def _resolve_database_url() -> str | None:
+    env_url = os.environ.get("DATABASE_URL", "").strip()
+    if env_url:
+        return env_url
+    try:
+        import streamlit as st
+
+        for key in ("DATABASE_URL", "database_url"):
+            if key in st.secrets:
+                value = str(st.secrets[key]).strip()
+                if value:
+                    return value
+    except Exception:
+        pass
+    return None
 
 
-def get_connection() -> sqlite3.Connection:
+def uses_postgres() -> bool:
+    global _USE_POSTGRES, _DATABASE_URL
+    if _USE_POSTGRES is None:
+        _DATABASE_URL = _resolve_database_url()
+        _USE_POSTGRES = bool(_DATABASE_URL)
+    return _USE_POSTGRES
+
+
+def get_backend_label() -> str:
+    if uses_postgres():
+        return "PostgreSQL (Supabase)"
+    return f"SQLite ({DB_PATH})"
+
+
+def _adapt_sql(sql: str) -> str:
+    if uses_postgres():
+        return sql.replace("?", "%s")
+    return sql
+
+
+def _adapt_nickname_lookup(sql: str) -> str:
+    if uses_postgres():
+        return sql.replace("nickname = ? COLLATE NOCASE", "LOWER(nickname) = LOWER(?)")
+    return sql
+
+
+def get_connection() -> Any:
+    if uses_postgres():
+        import psycopg2
+
+        url = _DATABASE_URL or _resolve_database_url()
+        if not url:
+            raise RuntimeError("DATABASE_URL não configurada.")
+        return psycopg2.connect(url)
+
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db() -> None:
-    """Cria tabelas e insere dados iniciais se o banco estiver vazio."""
-    conn = get_connection()
-    cursor = conn.cursor()
+def db_execute(conn: Any, sql: str, params: tuple | list = ()) -> Any:
+    sql = _adapt_sql(sql)
+    if uses_postgres():
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        return cur
+    return conn.execute(sql, params)
 
-    cursor.executescript(
+
+def db_executemany(conn: Any, sql: str, params_seq: list[tuple]) -> None:
+    sql = _adapt_sql(sql)
+    if uses_postgres():
+        cur = conn.cursor()
+        cur.executemany(sql, params_seq)
+        return
+    conn.executemany(sql, params_seq)
+
+
+def db_fetchone(cursor: Any) -> tuple | None:
+    row = cursor.fetchone()
+    return row
+
+
+def db_fetchall(cursor: Any) -> list[tuple]:
+    return cursor.fetchall()
+
+
+def _table_columns(conn: Any, table: str) -> set[str]:
+    if uses_postgres():
+        cur = db_execute(
+            conn,
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = ?
+            """,
+            (table,),
+        )
+        return {row[0] for row in db_fetchall(cur)}
+    cur = db_execute(conn, f"PRAGMA table_info({table})")
+    return {row[1] for row in db_fetchall(cur)}
+
+
+def _guides_json_from_text(wgb_rules: str, siege_rules: str, metas: str) -> tuple[str, str]:
+    return build_guides_payload(wgb_rules, siege_rules, metas)
+
+
+def _create_schema_sqlite(conn: Any) -> None:
+    db_execute(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS guild_config (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -56,16 +155,24 @@ def init_db() -> None:
             wgb_guide_json TEXT,
             siege_guide_json TEXT,
             content_version INTEGER DEFAULT 0
-        );
-
+        )
+        """,
+    )
+    db_execute(
+        conn,
+        """
         CREATE TABLE IF NOT EXISTS membros (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nome TEXT NOT NULL UNIQUE,
             nickname TEXT NOT NULL DEFAULT '',
             cargo TEXT NOT NULL CHECK (cargo IN ('Líder', 'Vice', 'Membro')),
             status TEXT NOT NULL CHECK (status IN ('Ativo', 'Inativo'))
-        );
-
+        )
+        """,
+    )
+    db_execute(
+        conn,
+        """
         CREATE TABLE IF NOT EXISTS defesas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nome TEXT NOT NULL,
@@ -76,29 +183,76 @@ def init_db() -> None:
             monstro3 TEXT NOT NULL,
             notas TEXT DEFAULT '',
             eficiencia REAL NOT NULL DEFAULT 5.0
-        );
-        """
+        )
+        """,
     )
 
-    # Migração inline (evita problemas de cache/reload do Streamlit)
-    cursor.execute("PRAGMA table_info(guild_config)")
-    colunas = {row[1] for row in cursor.fetchall()}
-    if "boas_vindas" not in colunas:
-        cursor.execute("ALTER TABLE guild_config ADD COLUMN boas_vindas TEXT")
-    if "content_version" not in colunas:
-        cursor.execute("ALTER TABLE guild_config ADD COLUMN content_version INTEGER DEFAULT 0")
-    if "wgb_guide_json" not in colunas:
-        cursor.execute("ALTER TABLE guild_config ADD COLUMN wgb_guide_json TEXT")
-    if "siege_guide_json" not in colunas:
-        cursor.execute("ALTER TABLE guild_config ADD COLUMN siege_guide_json TEXT")
 
-    cursor.execute("PRAGMA table_info(membros)")
-    colunas_membros = {row[1] for row in cursor.fetchall()}
+def _create_schema_postgres(conn: Any) -> None:
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS guild_config (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            nome_guilda TEXT NOT NULL DEFAULT 'Guilda 247',
+            discord_url TEXT DEFAULT 'https://discord.gg/exemplo',
+            boas_vindas TEXT,
+            metas TEXT,
+            siege_rules TEXT,
+            wgb_rules TEXT,
+            wgb_guide_json TEXT,
+            siege_guide_json TEXT,
+            content_version INTEGER DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS membros (
+            id SERIAL PRIMARY KEY,
+            nome TEXT NOT NULL UNIQUE,
+            nickname TEXT NOT NULL DEFAULT '',
+            cargo TEXT NOT NULL CHECK (cargo IN ('Líder', 'Vice', 'Membro')),
+            status TEXT NOT NULL CHECK (status IN ('Ativo', 'Inativo'))
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS defesas (
+            id SERIAL PRIMARY KEY,
+            nome TEXT NOT NULL,
+            tipo TEXT NOT NULL CHECK (tipo IN ('Conteste de SPD', 'Anti-Cleave')),
+            estrelas TEXT NOT NULL CHECK (estrelas IN ('4⭐', '5⭐')),
+            monstro1 TEXT NOT NULL,
+            monstro2 TEXT NOT NULL,
+            monstro3 TEXT NOT NULL,
+            notas TEXT DEFAULT '',
+            eficiencia DOUBLE PRECISION NOT NULL DEFAULT 5.0
+        )
+        """,
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_membros_nickname
+        ON membros (LOWER(nickname))
+        """,
+    ]
+    for sql in statements:
+        db_execute(conn, sql)
+
+
+def _migrate_sqlite(conn: Any) -> None:
+    colunas = _table_columns(conn, "guild_config")
+    if "boas_vindas" not in colunas:
+        db_execute(conn, "ALTER TABLE guild_config ADD COLUMN boas_vindas TEXT")
+    if "content_version" not in colunas:
+        db_execute(conn, "ALTER TABLE guild_config ADD COLUMN content_version INTEGER DEFAULT 0")
+    if "wgb_guide_json" not in colunas:
+        db_execute(conn, "ALTER TABLE guild_config ADD COLUMN wgb_guide_json TEXT")
+    if "siege_guide_json" not in colunas:
+        db_execute(conn, "ALTER TABLE guild_config ADD COLUMN siege_guide_json TEXT")
+
+    colunas_membros = _table_columns(conn, "membros")
     if "nickname" not in colunas_membros:
-        cursor.execute("ALTER TABLE membros ADD COLUMN nickname TEXT NOT NULL DEFAULT ''")
-        cursor.execute("UPDATE membros SET nickname = nome WHERE COALESCE(nickname, '') = ''")
+        db_execute(conn, "ALTER TABLE membros ADD COLUMN nickname TEXT NOT NULL DEFAULT ''")
+        db_execute(conn, "UPDATE membros SET nickname = nome WHERE COALESCE(nickname, '') = ''")
     if "foco" in colunas_membros:
-        cursor.executescript(
+        db_execute(
+            conn,
             """
             CREATE TABLE membros_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,34 +260,41 @@ def init_db() -> None:
                 nickname TEXT NOT NULL DEFAULT '',
                 cargo TEXT NOT NULL CHECK (cargo IN ('Líder', 'Vice', 'Membro')),
                 status TEXT NOT NULL CHECK (status IN ('Ativo', 'Inativo'))
-            );
-            INSERT INTO membros_new (id, nome, nickname, cargo, status)
-            SELECT id, nome, COALESCE(nickname, ''), cargo, status FROM membros;
-            DROP TABLE membros;
-            ALTER TABLE membros_new RENAME TO membros;
-            """
+            )
+            """,
         )
-    cursor.execute(
+        db_execute(
+            conn,
+            """
+            INSERT INTO membros_new (id, nome, nickname, cargo, status)
+            SELECT id, nome, COALESCE(nickname, ''), cargo, status FROM membros
+            """,
+        )
+        db_execute(conn, "DROP TABLE membros")
+        db_execute(conn, "ALTER TABLE membros_new RENAME TO membros")
+
+    db_execute(
+        conn,
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_membros_nickname "
-        "ON membros(nickname COLLATE NOCASE)"
+        "ON membros(nickname COLLATE NOCASE)",
     )
 
-    cursor.execute("PRAGMA table_info(defesas)")
-    colunas_defesas = {row[1] for row in cursor.fetchall()}
+    colunas_defesas = _table_columns(conn, "defesas")
     if "eficiencia" not in colunas_defesas:
-        cursor.execute(
-            "ALTER TABLE defesas ADD COLUMN eficiencia REAL NOT NULL DEFAULT 5.0"
-        )
-        cursor.execute("UPDATE defesas SET eficiencia = 5.0 WHERE eficiencia IS NULL")
+        db_execute(conn, "ALTER TABLE defesas ADD COLUMN eficiencia REAL NOT NULL DEFAULT 5.0")
+        db_execute(conn, "UPDATE defesas SET eficiencia = 5.0 WHERE eficiencia IS NULL")
 
+
+def _seed_and_sync(conn: Any) -> None:
     versao_anterior = 0
-    cursor.execute("SELECT COUNT(*) FROM guild_config")
-    if cursor.fetchone()[0] == 0:
+    cur = db_execute(conn, "SELECT COUNT(*) FROM guild_config")
+    if db_fetchone(cur)[0] == 0:
         wgb_md = get_wgb_rules()
         siege_md = get_siege_rules()
         metas_md = get_metas()
         wgb_json, siege_json = _guides_json_from_text(wgb_md, siege_md, metas_md)
-        cursor.execute(
+        db_execute(
+            conn,
             """
             INSERT INTO guild_config (
                 id, nome_guilda, discord_url, boas_vindas, metas,
@@ -154,15 +315,16 @@ def init_db() -> None:
             ),
         )
     else:
-        cursor.execute("SELECT COALESCE(content_version, 0) FROM guild_config WHERE id = 1")
-        row = cursor.fetchone()
+        cur = db_execute(conn, "SELECT COALESCE(content_version, 0) FROM guild_config WHERE id = 1")
+        row = db_fetchone(cur)
         versao_anterior = row[0] if row else 0
         if versao_anterior < CONTENT_VERSION:
             wgb_md = get_wgb_rules()
             siege_md = get_siege_rules()
             metas_md = get_metas()
             wgb_json, siege_json = _guides_json_from_text(wgb_md, siege_md, metas_md)
-            cursor.execute(
+            db_execute(
+                conn,
                 """
                 UPDATE guild_config
                 SET boas_vindas = ?, metas = ?, siege_rules = ?, wgb_rules = ?,
@@ -180,16 +342,16 @@ def init_db() -> None:
                 ),
             )
 
-    # Sincroniza JSON estruturado a partir do Markdown (fonte: admin / textos.md)
-    cursor.execute("SELECT wgb_rules, siege_rules, metas FROM guild_config WHERE id = 1")
-    guide_row = cursor.fetchone()
+    cur = db_execute(conn, "SELECT wgb_rules, siege_rules, metas FROM guild_config WHERE id = 1")
+    guide_row = db_fetchone(cur)
     if guide_row:
         wgb_json, siege_json = _guides_json_from_text(
             guide_row[0] or "",
             guide_row[1] or "",
             guide_row[2] or "",
         )
-        cursor.execute(
+        db_execute(
+            conn,
             """
             UPDATE guild_config
             SET wgb_guide_json = ?, siege_guide_json = ?
@@ -198,25 +360,27 @@ def init_db() -> None:
             (wgb_json, siege_json),
         )
 
-    cursor.execute("SELECT COUNT(*) FROM membros")
-    if cursor.fetchone()[0] == 0:
+    cur = db_execute(conn, "SELECT COUNT(*) FROM membros")
+    if db_fetchone(cur)[0] == 0:
         seed_membros = [
             ("Lucas", "Lucas247", "Líder", "Ativo"),
             ("Rafael", "RafaSW", "Vice", "Ativo"),
             ("Ana", "AnaPvP", "Membro", "Ativo"),
             ("Bruno", "BrunoFarm", "Membro", "Ativo"),
         ]
-        cursor.executemany(
+        db_executemany(
+            conn,
             "INSERT INTO membros (nome, nickname, cargo, status) VALUES (?, ?, ?, ?)",
             seed_membros,
         )
 
-    cursor.execute("SELECT COUNT(*) FROM defesas")
-    defesas_vazias = cursor.fetchone()[0] == 0
+    cur = db_execute(conn, "SELECT COUNT(*) FROM defesas")
+    defesas_vazias = db_fetchone(cur)[0] == 0
 
     if defesas_vazias or versao_anterior < CONTENT_VERSION:
-        cursor.execute("DELETE FROM defesas")
-        cursor.executemany(
+        db_execute(conn, "DELETE FROM defesas")
+        db_executemany(
+            conn,
             """
             INSERT INTO defesas (nome, tipo, estrelas, monstro1, monstro2, monstro3, notas)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -224,27 +388,56 @@ def init_db() -> None:
             get_defesas_seed(),
         )
 
-    cursor.execute(
-        "UPDATE defesas SET monstro2 = 'Irène' WHERE monstro2 IN ('Irene', 'Iréne')"
+    db_execute(
+        conn,
+        "UPDATE defesas SET monstro2 = 'Irène' WHERE monstro2 IN ('Irene', 'Iréne')",
     )
-    cursor.execute(
+    db_execute(
+        conn,
         """
         UPDATE defesas SET notas = 'Zenitsu de Vento (5⭐ SPD).'
         WHERE 'Zenitsu' IN (monstro1, monstro2, monstro3)
           AND notas LIKE 'Exemplo 5%'
-        """
+        """,
     )
-    cursor.execute(
+    db_execute(
+        conn,
         """
         UPDATE defesas
         SET nome = 'Ashour + Brita + Taranys', monstro3 = 'Taranys',
             notas = 'Taranys (Druida de Vento) como reviver.'
         WHERE monstro3 IN ('Reviver', 'Taranys') AND monstro1 = 'Ashour' AND monstro2 = 'Brita'
-        """
+        """,
     )
 
-    conn.commit()
-    conn.close()
+
+def init_db() -> None:
+    """Cria tabelas e insere dados iniciais se o banco estiver vazio."""
+    conn = get_connection()
+    try:
+        if uses_postgres():
+            _create_schema_postgres(conn)
+        else:
+            _create_schema_sqlite(conn)
+            _migrate_sqlite(conn)
+        _seed_and_sync(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reset_all_data() -> None:
+    """Apaga todos os dados (Postgres ou SQLite) e reexecuta o seed."""
+    if uses_postgres():
+        conn = get_connection()
+        try:
+            db_execute(conn, "TRUNCATE defesas, membros, guild_config RESTART IDENTITY CASCADE")
+            conn.commit()
+        finally:
+            conn.close()
+    elif DB_PATH.exists():
+        DB_PATH.unlink()
+    init_db()
 
 
 # --- Leitura (pandas) ---
@@ -252,8 +445,10 @@ def init_db() -> None:
 
 def load_guild_config() -> dict:
     conn = get_connection()
-    df = pd.read_sql_query("SELECT * FROM guild_config WHERE id = 1", conn)
-    conn.close()
+    try:
+        df = pd.read_sql_query("SELECT * FROM guild_config WHERE id = 1", conn)
+    finally:
+        conn.close()
     return df.iloc[0].to_dict() if not df.empty else {}
 
 
@@ -263,8 +458,10 @@ def load_membros(apenas_ativos: bool = False) -> pd.DataFrame:
     if apenas_ativos:
         query += " WHERE status = 'Ativo'"
     query += " ORDER BY CASE cargo WHEN 'Líder' THEN 1 WHEN 'Vice' THEN 2 ELSE 3 END, nome"
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    try:
+        df = pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
     return df
 
 
@@ -273,16 +470,17 @@ def get_membro_by_nickname(nickname: str) -> dict | None:
     if not nick:
         return None
     conn = get_connection()
-    df = pd.read_sql_query(
+    sql = _adapt_nickname_lookup(
         """
         SELECT id, nome, nickname, cargo, status
         FROM membros
         WHERE nickname = ? COLLATE NOCASE
-        """,
-        conn,
-        params=(nick,),
+        """
     )
-    conn.close()
+    try:
+        df = pd.read_sql_query(sql, conn, params=(nick,))
+    finally:
+        conn.close()
     return df.iloc[0].to_dict() if not df.empty else None
 
 
@@ -313,15 +511,17 @@ def load_nicknames_ativos() -> list[str]:
 
 def load_defesas() -> pd.DataFrame:
     conn = get_connection()
-    df = pd.read_sql_query(
-        """
-        SELECT id, nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia
-        FROM defesas
-        ORDER BY eficiencia DESC, estrelas DESC, nome ASC
-        """,
-        conn,
-    )
-    conn.close()
+    try:
+        df = pd.read_sql_query(
+            """
+            SELECT id, nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia
+            FROM defesas
+            ORDER BY eficiencia DESC, estrelas DESC, nome ASC
+            """,
+            conn,
+        )
+    finally:
+        conn.close()
     return df
 
 
@@ -338,53 +538,64 @@ def update_guild_config(
 ) -> None:
     wgb_json, siege_json = _guides_json_from_text(wgb_rules, siege_rules, metas)
     conn = get_connection()
-    conn.execute(
-        """
-        UPDATE guild_config
-        SET nome_guilda = ?, discord_url = ?, boas_vindas = ?, metas = ?,
-            siege_rules = ?, wgb_rules = ?, wgb_guide_json = ?, siege_guide_json = ?
-        WHERE id = 1
-        """,
-        (
-            nome_guilda,
-            discord_url,
-            boas_vindas,
-            metas,
-            siege_rules,
-            wgb_rules,
-            wgb_json,
-            siege_json,
-        ),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        db_execute(
+            conn,
+            """
+            UPDATE guild_config
+            SET nome_guilda = ?, discord_url = ?, boas_vindas = ?, metas = ?,
+                siege_rules = ?, wgb_rules = ?, wgb_guide_json = ?, siege_guide_json = ?
+            WHERE id = 1
+            """,
+            (
+                nome_guilda,
+                discord_url,
+                boas_vindas,
+                metas,
+                siege_rules,
+                wgb_rules,
+                wgb_json,
+                siege_json,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def create_membro(nome: str, nickname: str, cargo: str, status: str) -> None:
     conn = get_connection()
-    conn.execute(
-        "INSERT INTO membros (nome, nickname, cargo, status) VALUES (?, ?, ?, ?)",
-        (nome, nickname, cargo, status),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        db_execute(
+            conn,
+            "INSERT INTO membros (nome, nickname, cargo, status) VALUES (?, ?, ?, ?)",
+            (nome, nickname, cargo, status),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def update_membro(membro_id: int, nome: str, nickname: str, cargo: str, status: str) -> None:
     conn = get_connection()
-    conn.execute(
-        "UPDATE membros SET nome = ?, nickname = ?, cargo = ?, status = ? WHERE id = ?",
-        (nome, nickname, cargo, status, membro_id),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        db_execute(
+            conn,
+            "UPDATE membros SET nome = ?, nickname = ?, cargo = ?, status = ? WHERE id = ?",
+            (nome, nickname, cargo, status, membro_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_membro(membro_id: int) -> None:
     conn = get_connection()
-    conn.execute("DELETE FROM membros WHERE id = ?", (membro_id,))
-    conn.commit()
-    conn.close()
+    try:
+        db_execute(conn, "DELETE FROM membros WHERE id = ?", (membro_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def create_defesa(
@@ -398,15 +609,18 @@ def create_defesa(
     eficiencia: float = 5.0,
 ) -> None:
     conn = get_connection()
-    conn.execute(
-        """
-        INSERT INTO defesas (nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        db_execute(
+            conn,
+            """
+            INSERT INTO defesas (nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def update_defesa(
@@ -421,21 +635,26 @@ def update_defesa(
     eficiencia: float,
 ) -> None:
     conn = get_connection()
-    conn.execute(
-        """
-        UPDATE defesas
-        SET nome = ?, tipo = ?, estrelas = ?, monstro1 = ?, monstro2 = ?, monstro3 = ?,
-            notas = ?, eficiencia = ?
-        WHERE id = ?
-        """,
-        (nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia, defesa_id),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        db_execute(
+            conn,
+            """
+            UPDATE defesas
+            SET nome = ?, tipo = ?, estrelas = ?, monstro1 = ?, monstro2 = ?, monstro3 = ?,
+                notas = ?, eficiencia = ?
+            WHERE id = ?
+            """,
+            (nome, tipo, estrelas, monstro1, monstro2, monstro3, notas, eficiencia, defesa_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def delete_defesa(defesa_id: int) -> None:
     conn = get_connection()
-    conn.execute("DELETE FROM defesas WHERE id = ?", (defesa_id,))
-    conn.commit()
-    conn.close()
+    try:
+        db_execute(conn, "DELETE FROM defesas WHERE id = ?", (defesa_id,))
+        conn.commit()
+    finally:
+        conn.close()
