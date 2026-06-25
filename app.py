@@ -1428,7 +1428,7 @@ def page_meta_defesa() -> None:
     image_map = cached_monster_images(tuple(df["nome"].tolist()))
 
     st.subheader("Top do meta")
-    show_n = min(12, len(df))
+    show_n = min(30, len(df))
     cols_per_row = 3
     for i in range(0, show_n, cols_per_row):
         cols = st.columns(cols_per_row)
