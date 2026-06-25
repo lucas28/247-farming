@@ -1394,7 +1394,7 @@ def page_meta_defesa() -> None:
             "Batalhas mínimas por monstro",
             min_value=0,
             max_value=30000,
-            value=5000,
+            value=1000,
             step=500,
             key="meta_min_battles",
         )
