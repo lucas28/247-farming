@@ -542,6 +542,19 @@ def _seed_and_sync(conn: Any) -> None:
     db_execute(
         conn,
         """
+        UPDATE defesas SET monstro3 = 'Qilin Slasher'
+        WHERE monstro3 = 'Zenitsu'
+        """,
+    )
+    db_execute(
+        conn,
+        "UPDATE defesas SET notas = 'Zenitsu de Vento (5⭐ SPD).'"
+        " WHERE 'Qilin Slasher' IN (monstro1, monstro2, monstro3)"
+        " AND notas LIKE 'Exemplo 5%'",
+    )
+    db_execute(
+        conn,
+        """
         UPDATE defesas SET notas = 'Zenitsu de Vento (5⭐ SPD).'
         WHERE 'Zenitsu' IN (monstro1, monstro2, monstro3)
           AND notas LIKE 'Exemplo 5%'

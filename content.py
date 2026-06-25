@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 TEXTOS_PATH = Path(__file__).parent / "textos.md"
-CONTENT_VERSION = 2
+CONTENT_VERSION = 3
 
 
 def _read_raw() -> str:
@@ -143,9 +143,9 @@ def get_siege_guide() -> dict:
                 ],
                 "examples_5": [
                     "Seara + Orion / Jeogun + flex (dano, controle ou LD)",
-                    "Chandra + Monte + Zenitsu (Vento)",
+                    "Chandra + Monte + Qilin Slasher (Zenitsu Vento)",
                     "Chandra + Nora / Perna / Rakan + Byungchul / Zen / Shahat",
-                    "Platy + Irène + Zenitsu (Vento)",
+                    "Platy + Irène + Qilin Slasher (Zenitsu Vento)",
                     "Tarnisha + Savannah + flex (dano, controle ou LD)",
                 ],
             },
@@ -189,9 +189,9 @@ def get_defesas_seed() -> list[tuple]:
         ("Fiona + Eshir + Vritra", "Conteste de SPD", "4⭐", "Fiona", "Eshir", "Vritra", "Alternativas no slot 3: Truffle, Liesel."),
         # 5⭐ — Conteste de SPD
         ("Seara + Orion + Flex", "Conteste de SPD", "5⭐", "Seara", "Orion", "Flex LD/Dano", "Jeogun no lugar de Orion. 3º slot: dano, controle ou LD."),
-        ("Chandra + Monte + Zenitsu", "Conteste de SPD", "5⭐", "Chandra", "Monte", "Zenitsu", "Zenitsu de Vento (5⭐ SPD)."),
+        ("Chandra + Monte + Qilin Slasher", "Conteste de SPD", "5⭐", "Chandra", "Monte", "Qilin Slasher", "Zenitsu de Vento (5⭐ SPD)."),
         ("Chandra + Nora + Byoungchu", "Conteste de SPD", "5⭐", "Chandra", "Nora", "Byoungchu", "Slot 2: Perna ou Rakan. Slot 3: Zen ou Shahat."),
-        ("Platy + Irene + Zenitsu", "Conteste de SPD", "5⭐", "Platy", "Irène", "Zenitsu", "Zenitsu de Vento (5⭐ SPD)."),
+        ("Platy + Irene + Qilin Slasher", "Conteste de SPD", "5⭐", "Platy", "Irène", "Qilin Slasher", "Zenitsu de Vento (5⭐ SPD)."),
         ("Tarnisha + Savannah + Flex", "Conteste de SPD", "5⭐", "Tarnisha", "Savannah", "Flex LD/Dano", "3º slot: dano, controle ou LD."),
         # 4⭐ — Anti-Cleave
         ("Harmonia + Kinki + Vigor", "Anti-Cleave", "4⭐", "Harmonia", "Kinki", "Vigor", "Alternativa slot 2: Roid ou Skogul."),

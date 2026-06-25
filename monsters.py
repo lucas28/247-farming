@@ -15,14 +15,13 @@ from pathlib import Path
 SWARFARM_API = "https://swarfarm.com/api/v2/monsters/"
 SWARFARM_IMG = "https://swarfarm.com/static/herders/images/monsters/"
 CACHE_PATH = Path(__file__).parent / "data" / "monster_cache.json"
-MONSTER_CACHE_VERSION = 2  # incrementar ao mudar regras de elemento/imagem
+MONSTER_CACHE_VERSION = 3  # incrementar ao mudar regras de elemento/imagem
 
 # Apelidos / grafias usadas pela guilda → nome oficial no SWARFARM
 NAME_ALIASES: dict[str, str] = {
     "cichild": "Cichlid",
     "byoungchu": "Byungchul",
     "zen": "Byungchul",
-    "zenitsu": "Zenitsu Agatsuma",
     "jeogun": "Jeogun",
     "7r1x": "7R1X",
     "irene": "Irène",
@@ -34,9 +33,16 @@ NAME_ALIASES: dict[str, str] = {
     "reviver": "Taranys",
 }
 
-# Elemento preferido quando o monstro existe em várias atributos (ex: collabs)
-ELEMENT_PREFERENCES: dict[str, str] = {
-    "zenitsu": "Wind",
+# Elemento preferido quando o monstro existe em várias atributos
+ELEMENT_PREFERENCES: dict[str, str] = {}
+
+# Prefixos usados pelo SWGT (ex.: "Wind Qilin Slasher" → Qilin Slasher + Wind)
+ELEMENT_PREFIXES: dict[str, str] = {
+    "wind": "Wind",
+    "fire": "Fire",
+    "water": "Water",
+    "light": "Light",
+    "dark": "Dark",
 }
 
 PLACEHOLDER_KEY = "__placeholder__"
@@ -61,6 +67,17 @@ def _save_cache(cache: dict[str, str]) -> None:
 
 def _normalize_key(name: str) -> str:
     return re.sub(r"\s+", " ", name.strip().lower())
+
+
+def _split_element_prefix(name: str) -> tuple[str | None, str]:
+    """SWGT prefixa o elemento no nome (ex.: Wind Qilin Slasher)."""
+    parts = name.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        return None, name.strip()
+    element = ELEMENT_PREFIXES.get(parts[0].lower())
+    if not element:
+        return None, name.strip()
+    return element, parts[1]
 
 
 def _api_lookup(query: str) -> list[dict]:
@@ -121,11 +138,12 @@ def resolve_monster_image(name: str, cache: dict[str, str] | None = None) -> str
         _save_cache(cache)
         return PLACEHOLDER_IMG
 
-    search_name = alias or raw
+    parsed_element, base_name = _split_element_prefix(raw)
+    search_name = alias or (base_name if parsed_element else raw)
+    preferred_element = ELEMENT_PREFERENCES.get(key) or parsed_element
 
     try:
         results = _api_lookup(search_name)
-        preferred_element = ELEMENT_PREFERENCES.get(key)
         monster = _pick_best_match(search_name, results, preferred_element)
         if monster and monster.get("image_filename"):
             url = f"{SWARFARM_IMG}{monster['image_filename']}"

@@ -93,7 +93,7 @@ from swgt_meta import (
 )
 
 # Versão local do cache de imagens (incrementar ao mudar regras de elemento/imagem)
-_IMAGE_CACHE_VERSION = 3
+_IMAGE_CACHE_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # Configuração global da página
