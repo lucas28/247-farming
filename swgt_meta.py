@@ -22,7 +22,8 @@ from monsters import NAME_ALIASES
 SWGT_DEFENSE_URL = "https://swgt.io/controllers/allServerAnalytics/defenseTrending/load"
 USER_AGENT = "247Farming-GuildHub/1.0 (+https://github.com/lucas28/247-farming)"
 
-SIEGES_SEASONS: dict[str, str] = {
+# Usado só se o SWGT estiver fora ou mudar o layout da página.
+FALLBACK_SIEGES_SEASONS: dict[str, str] = {
     "Season 21 (atual)": "SSD_64",
     "Season 20": "SSD_58",
     "Season 19": "SSD_55",
@@ -116,6 +117,56 @@ def build_swgt_url(
     return f"{SWGT_DEFENSE_URL}?{params}"
 
 
+def _swgt_request(url: str, timeout: int = 30) -> str:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"SWGT retornou HTTP {exc.code}.") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Não foi possível acessar o SWGT: {exc.reason}") from exc
+
+
+def parse_siege_seasons(html: str) -> dict[str, str]:
+    """Extrai seasons do dropdown siegeSpecialDate na página do SWGT."""
+    soup = BeautifulSoup(html, "html.parser")
+    select = soup.find("select", attrs={"name": "siegeSpecialDate"})
+    if not select:
+        select = soup.find("select", id=re.compile(r"siegeSpecialDate", re.I))
+
+    seasons: dict[str, str] = {}
+    if not select:
+        raise ValueError("Dropdown siegeSpecialDate não encontrado no HTML do SWGT.")
+
+    for index, option in enumerate(select.find_all("option")):
+        code = (option.get("value") or "").strip()
+        label = option.get_text(strip=True)
+        if not code or not label:
+            continue
+        if index == 0 and "(atual)" not in label.lower():
+            label = f"{label} (atual)"
+        seasons[label] = code
+
+    if not seasons:
+        raise ValueError("Nenhuma season Siege encontrada no HTML do SWGT.")
+    return seasons
+
+
+def fetch_siege_seasons(timeout: int = 30) -> dict[str, str]:
+    """Lista seasons disponíveis no SWGT (mais recente primeiro)."""
+    fallback_code = next(iter(FALLBACK_SIEGES_SEASONS.values()))
+    html = _swgt_request(build_swgt_url(fallback_code), timeout=timeout)
+    return parse_siege_seasons(html)
+
+
 def _monster_name_from_cell(td: Any) -> str:
     img = td.find("img")
     if img:
@@ -165,22 +216,7 @@ def fetch_defense_rows(
     timeout: int = 30,
 ) -> list[DefenseRow]:
     url = build_swgt_url(siege_special_date, battle_type, battle_rank, natural_stars)
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/html,application/xhtml+xml",
-            "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"SWGT retornou HTTP {exc.code}.") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Não foi possível acessar o SWGT: {exc.reason}") from exc
-
+    html = _swgt_request(url, timeout=timeout)
     rows = parse_defense_table(html)
     if not rows:
         raise ValueError("Nenhuma defesa encontrada na resposta do SWGT.")

@@ -83,12 +83,13 @@ from speed_calculator import render_speed_calculator
 from swgt_meta import (
     BATTLE_RANKS,
     BATTLE_TYPES,
+    FALLBACK_SIEGES_SEASONS,
     NATURAL_STARS,
-    SIEGES_SEASONS,
     SORT_OPTIONS,
     aggregate_monsters,
     build_swgt_url,
     fetch_defense_rows,
+    fetch_siege_seasons,
     monster_meta_to_dataframe,
 )
 
@@ -937,7 +938,17 @@ def invalidate_cache() -> None:
     cached_membros.clear()
     cached_defesas.clear()
     cached_monster_images.clear()
+    cached_swgt_seasons.clear()
     cached_swgt_defenses.clear()
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_swgt_seasons() -> dict[str, str]:
+    """Seasons Siege do dropdown do SWGT (cache 24h)."""
+    try:
+        return fetch_siege_seasons()
+    except Exception:
+        return dict(FALLBACK_SIEGES_SEASONS)
 
 
 @st.cache_data(ttl=21600, show_spinner="Consultando SWGT.io…")
@@ -1373,9 +1384,14 @@ def page_meta_defesa() -> None:
     st.title("📈 Meta de Defesa")
     st.caption("Ranking de monstros do meta global, agregado a partir do SWGT.io.")
 
+    siege_seasons = cached_swgt_seasons()
+    season_options = list(siege_seasons.keys())
+    if st.session_state.get("meta_season") not in season_options:
+        st.session_state["meta_season"] = season_options[0]
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        season_label = st.selectbox("Season Siege", list(SIEGES_SEASONS.keys()), key="meta_season")
+        season_label = st.selectbox("Season Siege", season_options, key="meta_season")
     with c2:
         battle_type_label = st.selectbox("Tipo de batalha", list(BATTLE_TYPES.keys()), key="meta_battle_type")
     with c3:
@@ -1383,7 +1399,7 @@ def page_meta_defesa() -> None:
     with c4:
         stars_label = st.selectbox("Estrelas naturais", list(NATURAL_STARS.keys()), key="meta_natural_stars")
 
-    siege_code = SIEGES_SEASONS[season_label]
+    siege_code = siege_seasons[season_label]
     battle_type_code = BATTLE_TYPES[battle_type_label]
     battle_rank_code = BATTLE_RANKS[battle_rank_label]
     stars_code = NATURAL_STARS[stars_label]
@@ -1404,6 +1420,7 @@ def page_meta_defesa() -> None:
         st.write("")
         st.write("")
         if st.button("🔄 Atualizar", use_container_width=True, key="meta_refresh"):
+            cached_swgt_seasons.clear()
             cached_swgt_defenses.clear()
             st.rerun()
 
@@ -1433,7 +1450,8 @@ def page_meta_defesa() -> None:
         "Cada linha do SWGT é um trio com ≥1.000 batalhas. "
         "WR ponderado = média por volume de batalhas. "
         "Meta Score = WR ponderado × log₁₀(batalhas+1). "
-        "Cache: 6 horas — use Atualizar para forçar nova consulta."
+        "Seasons Siege: lista automática do SWGT (cache 24h). "
+        "Dados de defesa: cache 6h — use Atualizar para forçar nova consulta."
     )
 
     if df.empty:
