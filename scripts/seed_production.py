@@ -44,8 +44,10 @@ def cmd_status(_: argparse.Namespace) -> int:
     if not uses_postgres() and not DB_PATH.exists():
         print("Banco SQLite não encontrado. Rode: python scripts/seed_production.py fresh --force")
         return 1
-    if uses_postgres() and not os.environ.get("DATABASE_URL"):
-        print("DATABASE_URL não definida no ambiente.")
+    if uses_postgres() and not (
+        os.environ.get("DATABASE_URL") or os.environ.get("DB_HOST")
+    ):
+        print("Defina DATABASE_URL ou DB_HOST/DB_PASSWORD no ambiente.")
         return 1
 
     conn = get_connection()

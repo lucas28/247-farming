@@ -62,18 +62,29 @@ O `database.py` usa a **mesma API** nos dois backends; só muda a connection str
 
 1. Projeto criado em [supabase.com](https://supabase.com) (ref: `cugzgfbbtugeleotqwuc`).
 2. No Supabase, clique em **Connect** (topo) → **Connection pooling** → **Transaction** (porta **6543**).
-3. Copie a URI e cole em **Streamlit Cloud → Secrets**:
+3. Cole em **Streamlit Cloud → Secrets** (use **Opção B** se a senha tiver `@`, `#`, `!`, etc.):
+
+**Opção A** — connection string:
 
 ```toml
 admin_pin = "seu_pin_forte"
 DATABASE_URL = "postgresql://postgres.cugzgfbbtugeleotqwuc:[SENHA]@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
 ```
 
-> **Importante:** não use `db.cugzgfbbtugeleotqwuc.supabase.co:5432` no Streamlit Cloud. Esse host é IPv6 e costuma falhar no deploy. Use sempre o **pooler** (`*.pooler.supabase.com`, porta **6543**, usuário `postgres.cugzgfbbtugeleotqwuc`).
+**Opção B** — campos separados (recomendado para senhas com caracteres especiais):
 
-Se a senha tiver caracteres especiais (`@`, `#`, `!`, etc.), use a versão **URL-encoded** na connection string.
+```toml
+admin_pin = "seu_pin_forte"
+DB_HOST = "aws-0-sa-east-1.pooler.supabase.com"
+DB_PORT = 6543
+DB_USER = "postgres.cugzgfbbtugeleotqwuc"
+DB_PASSWORD = "sua_senha"
+DB_NAME = "postgres"
+```
 
-A região (`sa-east-1`) pode variar — use exatamente a URI que o painel do Supabase gerar.
+> **Importante:** não use `db.cugzgfbbtugeleotqwuc.supabase.co:5432` no Streamlit Cloud. Esse host é IPv6 e costuma falhar no deploy. Use sempre o **pooler** (`*.pooler.supabase.com`, porta **6543** ou **5432**, usuário `postgres.cugzgfbbtugeleotqwuc`).
+
+A região (`sa-east-1`) pode variar — use exatamente os valores que o painel **Connect** do Supabase gerar.
 
 **O que NÃO precisa:**
 - `npm install @supabase/supabase-js`

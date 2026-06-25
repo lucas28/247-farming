@@ -47,6 +47,8 @@ from database import (
     ESTRELAS,
     STATUS_OPCOES,
     TIPOS_DEFESA,
+    DatabaseConnectionError,
+    connection_setup_hints,
     create_defesa,
     create_membro,
     delete_defesa,
@@ -1782,7 +1784,19 @@ def main() -> None:
     inject_dark_theme()
     init_session_auth()
 
-    init_db()
+    try:
+        init_db()
+    except DatabaseConnectionError as exc:
+        st.error("Não foi possível conectar ao banco PostgreSQL (Supabase).")
+        st.code(str(exc))
+        st.markdown("**Como corrigir nos Secrets do Streamlit:**")
+        for hint in connection_setup_hints():
+            st.markdown(f"- {hint}")
+        st.markdown(
+            "**Alternativa (senha com caracteres especiais):** use campos separados "
+            "em vez de `DATABASE_URL` — veja `.streamlit/secrets.toml.example`."
+        )
+        return
 
     if not is_logged_in():
         render_login_gateway()

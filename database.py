@@ -11,6 +11,7 @@ import os
 import sqlite3
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import pandas as pd
 
@@ -34,31 +35,150 @@ ESTRELAS = ["4⭐", "5⭐"]
 
 _USE_POSTGRES: bool | None = None
 _DATABASE_URL: str | None = None
+_DB_CONFIG: dict[str, Any] | None = None
+_DB_CONFIG_LOADED = False
+
+SUPABASE_PROJECT_REF = "cugzgfbbtugeleotqwuc"
 
 
-def _resolve_database_url() -> str | None:
-    env_url = os.environ.get("DATABASE_URL", "").strip()
-    if env_url:
-        return env_url
+class DatabaseConnectionError(RuntimeError):
+    """Erro de conexão sem expor senha (seguro para exibir no Streamlit Cloud)."""
+
+
+def _secret_value(*keys: str) -> str | None:
+    for key in keys:
+        env_val = os.environ.get(key, "").strip()
+        if env_val:
+            return env_val
     try:
         import streamlit as st
 
-        for key in ("DATABASE_URL", "database_url"):
+        for key in keys:
             if key in st.secrets:
                 value = str(st.secrets[key]).strip()
                 if value:
                     return value
+        if "database" in st.secrets:
+            section = st.secrets["database"]
+            for key in keys:
+                if key in section:
+                    value = str(section[key]).strip()
+                    if value:
+                        return value
     except Exception:
         pass
     return None
 
 
-def uses_postgres() -> bool:
-    global _USE_POSTGRES, _DATABASE_URL
-    if _USE_POSTGRES is None:
+def _resolve_database_url() -> str | None:
+    return _secret_value("DATABASE_URL", "database_url")
+
+
+def _resolve_db_config() -> dict[str, Any] | None:
+    """Monta config a partir de DATABASE_URL ou campos separados nos secrets."""
+    url = _resolve_database_url()
+    if url:
+        url = _normalize_database_url(url)
+        parsed = urlparse(url)
+        if not parsed.hostname:
+            return None
+        return {
+            "host": parsed.hostname,
+            "port": parsed.port or 5432,
+            "user": unquote(parsed.username or ""),
+            "password": unquote(parsed.password or ""),
+            "dbname": (parsed.path or "/postgres").lstrip("/") or "postgres",
+            "source": "DATABASE_URL",
+        }
+
+    host = _secret_value("DB_HOST", "db_host")
+    password = _secret_value("DB_PASSWORD", "db_password")
+    if not host or not password:
+        return None
+
+    port_raw = _secret_value("DB_PORT", "db_port") or "6543"
+    return {
+        "host": host,
+        "port": int(port_raw),
+        "user": _secret_value("DB_USER", "db_user") or f"postgres.{SUPABASE_PROJECT_REF}",
+        "password": password,
+        "dbname": _secret_value("DB_NAME", "db_name") or "postgres",
+        "source": "DB_HOST/DB_PASSWORD",
+    }
+
+
+def _load_db_config() -> dict[str, Any] | None:
+    global _DB_CONFIG, _DATABASE_URL, _USE_POSTGRES, _DB_CONFIG_LOADED
+    if _DB_CONFIG_LOADED:
+        return _DB_CONFIG
+    _DB_CONFIG_LOADED = True
+    _DB_CONFIG = _resolve_db_config()
+    if _DB_CONFIG:
         _DATABASE_URL = _resolve_database_url()
-        _USE_POSTGRES = bool(_DATABASE_URL)
-    return _USE_POSTGRES
+        _USE_POSTGRES = True
+    else:
+        _DATABASE_URL = None
+        _USE_POSTGRES = False
+    return _DB_CONFIG
+
+
+def describe_connection_target() -> str:
+    """Resumo seguro da config (sem senha) para diagnóstico na UI."""
+    if not uses_postgres():
+        return f"Backend: SQLite ({DB_PATH})"
+
+    cfg = _load_db_config()
+    if not cfg:
+        return "Backend: PostgreSQL — DATABASE_URL ou DB_HOST/DB_PASSWORD não configurados."
+
+    lines = [
+        "Backend: PostgreSQL (Supabase)",
+        f"Origem da config: {cfg.get('source', '?')}",
+        f"Host: {cfg.get('host', '?')}",
+        f"Porta: {cfg.get('port', '?')}",
+        f"Usuário: {cfg.get('user', '?')}",
+        f"Banco: {cfg.get('dbname', '?')}",
+        f"Senha: {'configurada' if cfg.get('password') else 'AUSENTE'}",
+        "SSL: require",
+    ]
+
+    host = str(cfg.get("host", ""))
+    user = str(cfg.get("user", ""))
+    port = int(cfg.get("port", 0))
+
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        lines.append(
+            "⚠ Host direto (db.*.supabase.co) — use *.pooler.supabase.com no Streamlit Cloud."
+        )
+    if "pooler.supabase.com" in host and user == "postgres":
+        lines.append(
+            f"⚠ Usuário deve ser postgres.{SUPABASE_PROJECT_REF}, não apenas postgres."
+        )
+    if "pooler.supabase.com" in host and port == 5432 and user.startswith("postgres."):
+        lines.append("Dica: Session pooler (5432) — OK para este app.")
+    if "pooler.supabase.com" in host and port == 6543:
+        lines.append("Dica: Transaction pooler (6543) — OK para este app.")
+
+    return "\n".join(lines)
+
+
+def connection_setup_hints() -> list[str]:
+    """Passos para corrigir conexão no Streamlit Cloud."""
+    return [
+        "Supabase → Connect → Connection pooling → copie host, porta e usuário.",
+        "Use host *.pooler.supabase.com (não db.*.supabase.co).",
+        f"Usuário: postgres.{SUPABASE_PROJECT_REF}",
+        "Porta 6543 (Transaction) ou 5432 (Session) no pooler.",
+        "Se a senha tiver @ # ! etc., use DB_PASSWORD separado em vez de DATABASE_URL.",
+        "Supabase → Project Settings → Database → Network: Allow all IP addresses.",
+    ]
+
+
+def uses_postgres() -> bool:
+    global _USE_POSTGRES
+    if _USE_POSTGRES is None:
+        _load_db_config()
+    return bool(_USE_POSTGRES)
 
 
 def get_backend_label() -> str:
@@ -92,20 +212,25 @@ def get_connection() -> Any:
     if uses_postgres():
         import psycopg2
 
-        url = _normalize_database_url(_DATABASE_URL or _resolve_database_url() or "")
-        if not url:
-            raise RuntimeError("DATABASE_URL não configurada.")
+        cfg = _load_db_config()
+        if not cfg:
+            raise DatabaseConnectionError("DATABASE_URL ou DB_HOST/DB_PASSWORD não configurados.")
+
         try:
-            return psycopg2.connect(url)
+            return psycopg2.connect(
+                host=cfg["host"],
+                port=cfg["port"],
+                user=cfg["user"],
+                password=cfg["password"],
+                dbname=cfg["dbname"],
+                sslmode="require",
+                connect_timeout=15,
+            )
         except psycopg2.OperationalError as exc:
-            host_hint = ""
-            if "db." in url and ".supabase.co" in url:
-                host_hint = (
-                    " Dica: use o Session/Transaction pooler (host *.pooler.supabase.com, "
-                    "porta 6543, usuário postgres.SEU_REF) — o host db.*.supabase.co "
-                    "não funciona no Streamlit Cloud (IPv6)."
-                )
-            raise psycopg2.OperationalError(f"{exc}{host_hint}") from exc
+            safe_msg = str(exc).split("connection to server")[0].strip() or "Falha na conexão"
+            raise DatabaseConnectionError(
+                f"{safe_msg}\n\n{describe_connection_target()}"
+            ) from exc
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
