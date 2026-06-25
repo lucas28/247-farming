@@ -61,13 +61,17 @@ O `database.py` usa a **mesma API** nos dois backends; só muda a connection str
 > **Atenção:** o Supabase mostra um wizard com `npm install @supabase/supabase-js` e arquivos Next.js (`.env.local`, `page.tsx`, middleware). **Ignore isso** — o 24/7 Farming é **Streamlit + Python** e já conecta ao Postgres via `psycopg2` e `DATABASE_URL`.
 
 1. Projeto criado em [supabase.com](https://supabase.com) (ref: `cugzgfbbtugeleotqwuc`).
-2. **Project Settings → Database → Connection string → URI** (modo **Session pooler**, porta **6543**).
-3. Cole em **Streamlit Cloud → Secrets** (ou em `.streamlit/secrets.toml` local):
+2. No Supabase, clique em **Connect** (topo) → **Connection pooling** → **Transaction** (porta **6543**).
+3. Copie a URI e cole em **Streamlit Cloud → Secrets**:
 
 ```toml
 admin_pin = "seu_pin_forte"
-DATABASE_URL = "postgresql://postgres.cugzgfbbtugeleotqwuc:[SENHA_DO_BANCO]@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
+DATABASE_URL = "postgresql://postgres.cugzgfbbtugeleotqwuc:[SENHA]@aws-0-sa-east-1.pooler.supabase.com:6543/postgres"
 ```
+
+> **Importante:** não use `db.cugzgfbbtugeleotqwuc.supabase.co:5432` no Streamlit Cloud. Esse host é IPv6 e costuma falhar no deploy. Use sempre o **pooler** (`*.pooler.supabase.com`, porta **6543**, usuário `postgres.cugzgfbbtugeleotqwuc`).
+
+Se a senha tiver caracteres especiais (`@`, `#`, `!`, etc.), use a versão **URL-encoded** na connection string.
 
 A região (`sa-east-1`) pode variar — use exatamente a URI que o painel do Supabase gerar.
 

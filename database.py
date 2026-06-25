@@ -79,14 +79,33 @@ def _adapt_nickname_lookup(sql: str) -> str:
     return sql
 
 
+def _normalize_database_url(url: str) -> str:
+    """Remove aspas acidentais e garante SSL (obrigatório no Supabase)."""
+    url = url.strip().strip('"').strip("'")
+    if "sslmode=" not in url:
+        sep = "&" if "?" in url else "?"
+        url = f"{url}{sep}sslmode=require"
+    return url
+
+
 def get_connection() -> Any:
     if uses_postgres():
         import psycopg2
 
-        url = _DATABASE_URL or _resolve_database_url()
+        url = _normalize_database_url(_DATABASE_URL or _resolve_database_url() or "")
         if not url:
             raise RuntimeError("DATABASE_URL não configurada.")
-        return psycopg2.connect(url)
+        try:
+            return psycopg2.connect(url)
+        except psycopg2.OperationalError as exc:
+            host_hint = ""
+            if "db." in url and ".supabase.co" in url:
+                host_hint = (
+                    " Dica: use o Session/Transaction pooler (host *.pooler.supabase.com, "
+                    "porta 6543, usuário postgres.SEU_REF) — o host db.*.supabase.co "
+                    "não funciona no Streamlit Cloud (IPv6)."
+                )
+            raise psycopg2.OperationalError(f"{exc}{host_hint}") from exc
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
